@@ -132,9 +132,10 @@ with a:
     if st.button('Restaurar estrategia base',use_container_width=True):
         st.session_state['legs_editor']=DEFAULT_LEGS.copy();st.session_state['editor_version']=st.session_state.get('editor_version',0)+1;st.session_state.pop('quote_report',None);st.rerun()
 with b:st.caption('Cantidad positiva = posición larga; negativa = posición corta. Todas las posiciones comparten el vencimiento seleccionado.')
-st.toggle('Activar vencimientos de mercado', key='load_chain_on', help='Consulta los vencimientos listados de AAPL. Requiere acceso externo y puede fallar.')
+st.toggle('Activar vencimientos de mercado', key='load_chain_on', value=True, help='Consulta los vencimientos listados de AAPL. Requiere acceso externo y puede fallar.')
 if st.session_state.get('load_chain_on') and not exps:
     st.warning('No se pudo consultar el listado de vencimientos. No se rellenarán precios de opciones. ' + str(exps_error or ''))
+st.caption('Bid y Ask vacíos significan cotización no recibida, NO precio cero. Selecciona un vencimiento listado y actualiza. Si Yahoo Finance no devuelve precios, se mostrará el motivo.')
 if st.button('Actualizar Bid / Ask de las posiciones desde el mercado', type='primary'):
     if not st.session_state.get('load_chain_on') or not exps:
         st.warning('Primero activa «Vencimientos de mercado» y selecciona un vencimiento listado.')
@@ -173,8 +174,10 @@ if st.session_state.get('quote_report'):
     rep=st.session_state['quote_report']
     st.info(f"Cadena consultada: {rep['expiry']} · Consulta: {rep['time']} · Contratos encontrados: {rep['filled']}. Cotizaciones externas indicativas; no necesariamente en tiempo real ni ejecutables.")
     if rep['missing']:st.warning('Sin cotización exacta: '+', '.join(rep['missing']))
+    if rep['filled']==0:st.error('La fuente no devolvió cotizaciones para los strikes solicitados. No se pueden mostrar Bid/Ask reales sin datos de la bolsa.')
     if rep['stale']:st.warning('Última operación registrada hace ≥3 días (no equivale a antigüedad del Bid/Ask): '+', '.join(rep['stale']))
 if 'legs_editor' not in st.session_state:st.session_state['legs_editor']=DEFAULT_LEGS.copy()
+st.info('Los campos vacíos de Bid/Ask no son un error de cálculo: aún no hay precios confirmados para esos contratos. No se sustituyen por primas inventadas.')
 legs=st.data_editor(st.session_state['legs_editor'],key=f"editable_legs_{st.session_state.get('editor_version',0)}",num_rows='dynamic',hide_index=True,use_container_width=True,
     column_config={'Tipo':st.column_config.SelectboxColumn('Tipo',options=['Call','Put'],required=True),'Strike':st.column_config.NumberColumn('Strike (USD)',min_value=.01,required=True),'Contratos':st.column_config.NumberColumn('Contratos (+/−)',step=1,required=True),'Bid':st.column_config.NumberColumn('Bid (USD)',min_value=0.0),'Ask':st.column_config.NumberColumn('Ask (USD)',min_value=0.0)})
 legs=legs.dropna(subset=['Tipo','Strike','Contratos']).copy()
