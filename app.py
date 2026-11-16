@@ -1,122 +1,260 @@
-import streamlit as st
+import math
+from datetime import date, datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from math import log,sqrt,exp,erf
-st.set_page_config(page_title='AEGIS Phoenix | AAPL',layout='wide')
-st.markdown("""<div style="display:flex;align-items:center;gap:20px;margin-bottom:10px"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+PHBhdGggZmlsbD0iIzE2MWMyOCIgZD0iTTMyLjYgMTQuMmMtMy4zLS4zLTUuNCAxLjgtOC4xIDEuOC0yLjUgMC00LjUtMi03LjctMS43QzkuNiAxNSA1LjEgMjEuMiA2LjQgMjkuNGMxIDYuNCA1LjcgMTUuMSAxMC4zIDE1LjEgMi41IDAgMy44LTEuNiA3LjYtMS42IDMuNSAwIDQuOSAxLjYgNy41IDEuNiA0LjEgMCA4LTYuNCA5LjgtMTEuNC01LjQtMi4xLTcuNC05LjUtMi40LTEzLjQtMS44LTEuMS0zLjktMS41LTYuNi0xLjV6Ii8+PHBhdGggZmlsbD0iIzE2MWMyOCIgZD0iTTI0LjggMTMuNUMyNC4zIDcuOCAyOC4yIDMgMzQuNCAyLjFjLjQgNS43LTMuOCAxMC42LTkuNiAxMS40eiIvPjwvc3ZnPg==" width="54" height="54" alt="Apple"/><div><div style="font-size:2rem;font-weight:700;letter-spacing:-.04em">AEGIS Phoenix</div><div style="font-size:.86rem;color:#77808d;letter-spacing:.06em">AAPL · DERIVATIVES & STRUCTURED STRATEGIES</div></div></div>""",unsafe_allow_html=True)
-st.caption('Apple Inc. · NASDAQ: AAPL | Motor de valoración de opciones y análisis de estrategias multileg.')
-st.info('Datos de referencia histórica: AAPL $356.27 (13 nov 2026). Los parámetros iniciales no representan cotizaciones en vivo; las primas de mercado deben validarse para el mismo vencimiento y momento.')
-st.sidebar.header('Parámetros de mercado')
-st.sidebar.caption('Parámetros editables · Escenarios y sensibilidad de valoración')
-S=st.sidebar.number_input('Precio spot AAPL (USD)',value=356.27,step=0.01)
-T=st.sidebar.number_input('Plazo residual (días)',min_value=1,value=7)
-r=st.sidebar.number_input('Tasa libre de riesgo anual (%)',value=4.0)/100
-q=st.sidebar.number_input('Rendimiento por dividendos anual (%)',value=0.3)/100
-vol=st.sidebar.number_input('Volatilidad anual estimada (%)',value=22.5)/100
-st.sidebar.caption('Volatilidad de referencia indicativa; no corresponde necesariamente a la IV de cada contrato.')
-N=lambda x:0.5*(1+erf(x/sqrt(2)))
-def bs(typ,K):
- t=T/365
- d1=(log(S/K)+(r-q+vol*vol/2)*t)/(vol*sqrt(t));d2=d1-vol*sqrt(t)
- return S*exp(-q*t)*N(d1)-K*exp(-r*t)*N(d2) if typ=='Call' else K*exp(-r*t)*N(-d2)-S*exp(-q*t)*N(-d1)
-def binomial(typ,K,american=False,steps=150):
- t=T/365;dt=t/steps;u=exp(vol*sqrt(dt));d=1/u;p=(exp((r-q)*dt)-d)/(u-d)
- vals=np.array([max((S*u**j*d**(steps-j)-K) if typ=='Call' else (K-S*u**j*d**(steps-j)),0) for j in range(steps+1)],dtype=float)
- for i in range(steps-1,-1,-1):
-  vals=exp(-r*dt)*(p*vals[1:]+(1-p)*vals[:-1])
-  if american:
-   spots=np.array([S*u**j*d**(i-j) for j in range(i+1)])
-   vals=np.maximum(vals,np.maximum(spots-K,0) if typ=='Call' else np.maximum(K-spots,0))
- return float(vals[0])
-# Quote snapshots, strictly only verified entries; blanks mean no verified quote.
-quotes={('Call',345):(11.50,15.70),('Call',350):(7.80,11.15),('Call',355):(4.25,7.75),('Call',360):(2.43,4.30),('Call',365):(0.00,3.50)}
-def default_rows():
- return pd.DataFrame([
-  ['Bull Call','Call',350,1,None,None],['Bull Call','Call',370,-1,None,None],
-  ['Bear Put','Put',345,1,None,None],['Bear Put','Put',325,-1,None,None],
-  ['Butterfly','Call',355,1,None,None],['Butterfly','Call',365,-2,None,None],['Butterfly','Call',375,1,None,None]],columns=['Componente','Tipo','Strike','Cantidad (+compra / -venta)','Bid real','Ask real'])
-st.subheader('01 · Estructura de opciones')
-st.write('Estrategia multileg editable. Los campos Bid/Ask vacíos indican ausencia de una cotización verificada; no equivalen a cero.')
-if 'legs' not in st.session_state: st.session_state.legs=default_rows()
-if st.button('Restaurar estrategia base'):
- st.session_state.legs=default_rows()
- st.session_state.pop('legs_editor',None)
- st.rerun()
-st.caption('Modifica los parámetros y las posiciones para analizar escenarios. Cantidad positiva = compra; negativa = venta.')
-df=st.data_editor(st.session_state.legs,num_rows='dynamic',hide_index=True,use_container_width=True,key='legs_editor',column_config={'Tipo':st.column_config.SelectboxColumn(options=['Call','Put']),'Componente':st.column_config.SelectboxColumn(options=['Bull Call','Bear Put','Butterfly','Otro'])})
-df['Strike']=pd.to_numeric(df['Strike'],errors='coerce');df['Cantidad (+compra / -venta)']=pd.to_numeric(df['Cantidad (+compra / -venta)'],errors='coerce')
-df=df.dropna(subset=['Strike','Cantidad (+compra / -venta)'])
-mode=st.radio('Modelo de valoración', ['Black-Scholes (teórico)','Binomial europeo (teórico)','Binomial americano (teórico)','Mercado Bid/Ask (solo cotizaciones capturadas)'],horizontal=True)
-rows=[];missing=[]
-for _,a in df.iterrows():
- typ=a['Tipo'];K=float(a['Strike']);qty=float(a['Cantidad (+compra / -venta)'])
- if mode.startswith('Black'): premium=bs(typ,K)
- elif mode.startswith('Binomial'):premium=binomial(typ,K,'americano' in mode)
- else:
-  bid=a['Bid real'];ask=a['Ask real']; bid=quotes.get((typ,K),(None,None))[0] if pd.isna(bid) else bid;ask=quotes.get((typ,K),(None,None))[1] if pd.isna(ask) else ask
-  premium=ask if qty>0 else bid
-  if premium is None or pd.isna(premium):missing.append(f'{typ} {K:g}');premium=np.nan
- rows.append({**a.to_dict(),'Prima usada':premium,'Flujo inicial':-qty*premium})
-res=pd.DataFrame(rows)
-st.dataframe(res,use_container_width=True,hide_index=True)
-if missing:st.error('Faltan cotizaciones verificadas para: '+', '.join(missing)+'. Cambia a valoración teórica o introduce Bid/Ask reales para calcular.')
+import plotly.graph_objects as go
+import streamlit as st
+from scipy.stats import norm
+from scipy.optimize import brentq
+
+st.set_page_config(page_title='AEGIS Phoenix | AAPL Options Analytics', page_icon='📈', layout='wide', initial_sidebar_state='expanded')
+st.markdown('''<style>
+.block-container{padding-top:1.3rem;max-width:1500px} h1,h2,h3{letter-spacing:-.025em}
+[data-testid="stMetric"]{background:rgba(120,130,150,.07);padding:14px;border-radius:12px;border:1px solid rgba(120,130,150,.16)}
+.smallnote{font-size:.84rem;opacity:.75}.brand{font-size:2.0rem;font-weight:750;letter-spacing:-.04em}.subtitle{opacity:.7;margin-top:-10px}
+</style>''',unsafe_allow_html=True)
+
+DEFAULT_LEGS = pd.DataFrame([
+ {'Componente':'Bull Call Spread','Tipo':'Call','Strike':350.0,'Contratos':1,'Bid':np.nan,'Ask':np.nan},
+ {'Componente':'Bull Call Spread','Tipo':'Call','Strike':370.0,'Contratos':-1,'Bid':np.nan,'Ask':np.nan},
+ {'Componente':'Bear Put Spread','Tipo':'Put','Strike':345.0,'Contratos':1,'Bid':np.nan,'Ask':np.nan},
+ {'Componente':'Bear Put Spread','Tipo':'Put','Strike':325.0,'Contratos':-1,'Bid':np.nan,'Ask':np.nan},
+ {'Componente':'Long Call Butterfly','Tipo':'Call','Strike':355.0,'Contratos':1,'Bid':np.nan,'Ask':np.nan},
+ {'Componente':'Long Call Butterfly','Tipo':'Call','Strike':365.0,'Contratos':-2,'Bid':np.nan,'Ask':np.nan},
+ {'Componente':'Long Call Butterfly','Tipo':'Call','Strike':375.0,'Contratos':1,'Bid':np.nan,'Ask':np.nan},
+])
+
+def bs(spot,k,t,r,q,sigma,kind):
+    if t<=0: return max(spot-k,0) if kind=='Call' else max(k-spot,0)
+    if sigma<=0:
+        f=spot*math.exp((r-q)*t)
+        return math.exp(-r*t)*(max(f-k,0) if kind=='Call' else max(k-f,0))
+    d1=(math.log(spot/k)+(r-q+.5*sigma*sigma)*t)/(sigma*math.sqrt(t));d2=d1-sigma*math.sqrt(t)
+    if kind=='Call':return spot*math.exp(-q*t)*norm.cdf(d1)-k*math.exp(-r*t)*norm.cdf(d2)
+    return k*math.exp(-r*t)*norm.cdf(-d2)-spot*math.exp(-q*t)*norm.cdf(-d1)
+
+def binomial(spot,k,t,r,q,sigma,kind,american=False,steps=150):
+    if t<=0:return max(spot-k,0) if kind=='Call' else max(k-spot,0)
+    if sigma<=0:return bs(spot,k,t,r,q,sigma,kind)
+    dt=t/steps;u=math.exp(sigma*math.sqrt(dt));d=1/u
+    p=(math.exp((r-q)*dt)-d)/(u-d)
+    if p<0 or p>1:return float('nan')
+    j=np.arange(steps+1); s=spot*(u**j)*(d**(steps-j))
+    v=np.maximum(s-k,0) if kind=='Call' else np.maximum(k-s,0)
+    disc=math.exp(-r*dt)
+    for n in range(steps-1,-1,-1):
+        v=disc*(p*v[1:]+(1-p)*v[:-1])
+        if american:
+            j=np.arange(n+1);s=spot*(u**j)*(d**(n-j))
+            v=np.maximum(v,np.maximum(s-k,0) if kind=='Call' else np.maximum(k-s,0))
+    return float(v[0])
+
+def intrinsic(xs,k,kind):return np.maximum(xs-k,0) if kind=='Call' else np.maximum(k-xs,0)
+
+def net_payoff(xs,legs,premiums):
+    xs=np.asarray(xs,dtype=float)
+    out=np.zeros_like(xs)
+    for (_,leg),p in zip(legs.iterrows(),premiums):out+=int(leg['Contratos'])*(intrinsic(xs,float(leg['Strike']),leg['Tipo'])-p)
+    return out
+
+def extremes(legs,premiums):
+    strikes=sorted(set(float(x) for x in legs['Strike']))
+    lo=max(0,strikes[0]-max(100,strikes[-1]-strikes[0]))
+    hi=strikes[-1]+max(100,strikes[-1]-strikes[0])
+    knots=sorted(set([0.0,lo,*strikes,hi]))
+    vals=net_payoff(knots,legs,premiums)
+    low_slope=sum(int(row['Contratos'])*(-1 if row['Tipo']=='Put' else 0) for _,row in legs.iterrows())
+    high_slope=sum(int(row['Contratos'])*(1 if row['Tipo']=='Call' else 0) for _,row in legs.iterrows())
+    # Domain S_T >= 0; positive high slope means unbounded gain; negative means unbounded loss.
+    best=float(np.max(vals));worst=float(np.min(vals))
+    if high_slope>0:best=float('inf')
+    if high_slope<0:worst=float('-inf')
+    roots=[]
+    for a,b,va,vb in zip(knots[:-1],knots[1:],vals[:-1],vals[1:]):
+        if abs(va)<1e-8:roots.append(a)
+        if va*vb<0:roots.append(a+(b-a)*(-va)/(vb-va))
+    if abs(vals[-1])<1e-8:roots.append(knots[-1])
+    return best,worst,sorted(set(round(x,5) for x in roots)),knots
+
+@st.cache_data(ttl=600,show_spinner=False)
+def market_snapshot():
+    try:
+        import yfinance as yf
+        ticker=yf.Ticker('AAPL')
+        hist=ticker.history(period='7d',auto_adjust=False)
+        if hist.empty:return None,'Sin cotización disponible'
+        spot=float(hist['Close'].dropna().iloc[-1]);stamp=str(hist.index[-1].date())
+        return {'spot':spot,'asof':stamp},None
+    except Exception as e:return None,str(e)[:150]
+
+@st.cache_data(ttl=600,show_spinner=False)
+def expirations():
+    try:
+        import yfinance as yf
+        return list(yf.Ticker('AAPL').options),None
+    except Exception as e:return [],str(e)[:150]
+
+@st.cache_data(ttl=600,show_spinner=False)
+def option_chain(expiry):
+    try:
+        import yfinance as yf
+        chain=yf.Ticker('AAPL').option_chain(expiry)
+        return chain.calls[['strike','bid','ask','lastTradeDate','openInterest','impliedVolatility']].copy(),chain.puts[['strike','bid','ask','lastTradeDate','openInterest','impliedVolatility']].copy(),None
+    except Exception as e:return None,None,str(e)[:150]
+
+st.markdown('<div class="brand">AEGIS PHOENIX <span style="font-weight:400;opacity:.5">/ AAPL</span></div><div class="subtitle">Equity Options · Multi-Leg Strategy & Risk Analytics</div>',unsafe_allow_html=True)
+st.caption('Herramienta analítica independiente sobre Apple Inc. (AAPL). No afiliada a Apple. Los datos externos pueden estar retrasados o no disponibles.')
+
+with st.sidebar:
+    st.header('Parámetros de mercado')
+    market_mode=st.toggle('Consultar precio AAPL (fuente externa)',value=False,help='Consulta opcional de cierre reciente mediante Yahoo Finance. No garantiza tiempo real.')
+    snap,err=market_snapshot() if market_mode else (None,None)
+    if snap:st.success(f"Cierre obtenido: USD {snap['spot']:.2f} · {snap['asof']}")
+    elif market_mode:st.warning('No se pudo obtener el precio. Captura manual habilitada.')
+    spot=st.number_input('Precio spot (USD)',min_value=0.01,value=float(snap['spot']) if snap else 356.27,step=1.0,format='%.2f')
+    expiry=st.date_input('Fecha de vencimiento',value=date.today()+timedelta(days=30),min_value=date.today())
+    days=max((expiry-date.today()).days,0);t=max(days,0)/365
+    r=st.number_input('Tasa libre de riesgo anual (%)',value=4.0,step=.25)/100
+    q=st.number_input('Dividend yield anual (%)',value=.3,step=.1)/100
+    sigma=st.number_input('Volatilidad anual (%)',min_value=0.0,value=22.5,step=.5)/100
+    multiplier=st.number_input('Multiplicador por contrato',min_value=1,max_value=100000,value=100)
+    scenario=st.number_input('Precio AAPL del escenario (USD)',min_value=0.0,value=float(spot),step=5.0)
+    st.caption('Los parámetros se pueden editar sin modificar el código. La fecha de valoración es la fecha actual del servidor.')
+
+st.subheader('Construcción de la estrategia')
+a,b=st.columns([1,4])
+with a:
+    if st.button('Restaurar estrategia base',use_container_width=True):
+        st.session_state['legs_editor']=DEFAULT_LEGS.copy();st.rerun()
+with b:st.caption('Cantidad positiva = posición larga; negativa = posición corta. Todas las posiciones comparten el vencimiento seleccionado.')
+if 'legs_editor' not in st.session_state:st.session_state['legs_editor']=DEFAULT_LEGS.copy()
+legs=st.data_editor(st.session_state['legs_editor'],key='editable_legs',num_rows='dynamic',hide_index=True,use_container_width=True,
+    column_config={'Tipo':st.column_config.SelectboxColumn('Tipo',options=['Call','Put'],required=True),'Strike':st.column_config.NumberColumn('Strike (USD)',min_value=.01,required=True),'Contratos':st.column_config.NumberColumn('Contratos (+/−)',step=1,required=True),'Bid':st.column_config.NumberColumn('Bid (USD)',min_value=0.0),'Ask':st.column_config.NumberColumn('Ask (USD)',min_value=0.0)})
+legs=legs.dropna(subset=['Tipo','Strike','Contratos']).copy()
+if legs.empty:st.info('Agrega una posición para comenzar.');st.stop()
+legs['Strike']=pd.to_numeric(legs['Strike'],errors='coerce');legs['Contratos']=pd.to_numeric(legs['Contratos'],errors='coerce')
+legs=legs.dropna(subset=['Strike','Contratos'])
+legs=legs[(legs['Strike']>0)&(legs['Contratos']!=0)&legs['Tipo'].isin(['Call','Put'])].copy()
+if legs.empty:st.warning('No hay posiciones válidas.');st.stop()
+legs['Contratos']=legs['Contratos'].astype(int)
+
+st.subheader('Valuación y primas')
+pricing=st.radio('Fuente de primas',['Black-Scholes · teórico','Árbol binomial europeo · teórico','Árbol binomial americano · teórico','Bid/Ask capturados · mercado'],horizontal=True)
+if pricing.startswith('Bid/Ask'):
+    used=[];missing=[]
+    for i,row in legs.iterrows():
+        quote=row.get('Ask') if row['Contratos']>0 else row.get('Bid')
+        if pd.isna(quote):missing.append(i);used.append(float('nan'))
+        else:used.append(float(quote))
+    if missing:st.error(f'Faltan cotizaciones Bid/Ask para {len(missing)} posición(es). No se sustituirán por primas teóricas.');st.stop()
 else:
- cost=-res['Flujo inicial'].sum()
- strikes=sorted(set(float(v) for v in res['Strike']))
- lo=max(1,min(strikes+[S])-30);hi=max(strikes+[S])+30
- xx=np.unique(np.r_[np.linspace(lo,hi,501),strikes])
- gross=np.zeros_like(xx)
- for _,a in res.iterrows():
-  k=float(a['Strike']);qty=float(a['Cantidad (+compra / -venta)']);gross+=qty*(np.maximum(xx-k,0) if a['Tipo']=='Call' else np.maximum(k-xx,0))
- yy=gross-cost
- st.metric('Costo neto por acción (positivo = débito)',f'${cost:,.2f}')
- scenario=st.number_input('Escenario de precio AAPL al vencimiento (USD)',min_value=0.01,value=float(round(S,2)),step=1.0)
- scenario_gross=sum(float(a['Cantidad (+compra / -venta)'])*(max(scenario-float(a['Strike']),0) if a['Tipo']=='Call' else max(float(a['Strike'])-scenario,0)) for _,a in res.iterrows())
- st.metric('P&L del escenario (100 acciones)',f'${(scenario_gross-cost)*100:,.2f}')
- # En una cartera de opciones, los extremos pueden estar fuera del rango dibujado.
- # Evaluar todos los strikes y el límite inferior S_T=0; comprobar las pendientes de las colas.
- critical=sorted(set([0.0]+strikes))
- def total_payoff(z):
-  return sum(float(a['Cantidad (+compra / -venta)'])*(max(z-float(a['Strike']),0) if a['Tipo']=='Call' else max(float(a['Strike'])-z,0)) for _,a in res.iterrows())-cost
- tail_slope=sum(float(a['Cantidad (+compra / -venta)']) for _,a in res.iterrows() if a['Tipo']=='Call')
- critical_vals=[total_payoff(z) for z in critical]
- minval=min(critical_vals);maxval=max(critical_vals)
- st.metric('Pérdida máxima teórica (100 acciones)', 'Ilimitada' if tail_slope < -1e-10 else f'${minval*100:,.2f}')
- st.metric('Ganancia máxima teórica (100 acciones)', 'Ilimitada' if tail_slope > 1e-10 else f'${maxval*100:,.2f}')
- fig,ax=plt.subplots(figsize=(10,4));ax.plot(xx,yy,linewidth=2);ax.axhline(0,color='gray',linewidth=1)
- for k in strikes:ax.axvline(k,alpha=.15,linestyle='--')
- ax.set_xlabel('Precio AAPL al vencimiento (USD)');ax.set_ylabel('Utilidad / pérdida neta (USD por acción)');ax.set_title('Perfil de rentabilidad al vencimiento');ax.grid(alpha=.15);st.pyplot(fig)
- # evaluate exact breakpoints, slopes and roots
- def payoff(z):
-  return sum(float(a['Cantidad (+compra / -venta)'])*(max(z-float(a['Strike']),0) if a['Tipo']=='Call' else max(float(a['Strike'])-z,0)) for _,a in res.iterrows())-cost
- pts=[lo]+[k for k in strikes if lo<k<hi]+[hi]; roots=[]
- for a,b in zip(pts[:-1],pts[1:]):
-  fa,fb=payoff(a),payoff(b)
-  if abs(fa)<1e-7:roots.append(a)
-  if fa*fb<0:roots.append(a-fa*(b-a)/(fb-fa))
-  if abs(fb)<1e-7:roots.append(b)
- st.write('Puntos de equilibrio en el rango visualizado:',', '.join(f'${z:.2f}' for z in sorted(set(round(x,5) for x in roots))) or 'Ninguno')
- table=pd.DataFrame({'Precio final AAPL':pts,'Utilidad por acción':[payoff(x) for x in pts],'Utilidad por 100 acciones':[payoff(x)*100 for x in pts]})
- st.dataframe(table,hide_index=True,use_container_width=True)
- st.download_button('Descargar resultados CSV',table.to_csv(index=False).encode('utf-8-sig'),'aegis_phoenix_resultados.csv','text/csv')
-st.divider();st.subheader('02 · Modelos de valoración y simulación')
-tabs=st.tabs(['Forward','Curva IRS (referencia)','Árbol binomial','Black-Scholes','Monte Carlo'])
-with tabs[0]:
- st.write('Forward teórico con rendimiento por dividendos continuo: F = S × exp((r − q) × T).')
- st.metric('Forward teórico',f'${S*exp((r-q)*T/365):.4f}')
-with tabs[1]:
- st.warning('No se ha obtenido una curva IRS de mercado validada. La siguiente curva es plana y didáctica, basada en la tasa editable del panel; no es una curva swap real.')
- tenors=np.array([1/12,3/12,6/12,1,2,3,5]);st.dataframe(pd.DataFrame({'Plazo (años)':tenors,'Tasa de ejemplo (%)':np.full(len(tenors),r*100),'Factor descuento':np.exp(-r*tenors)}),hide_index=True)
-with tabs[2]:
- K=st.number_input('Strike binomial',value=355.0,key='kb');typ=st.selectbox('Opción binomial',['Call','Put']);n=st.slider('Pasos',10,400,150)
- st.write('Europea:',round(binomial(typ,K,False,n),4),'| Americana:',round(binomial(typ,K,True,n),4))
-with tabs[3]:
- K=st.number_input('Strike Black-Scholes',value=355.0,key='ks');st.write('Call:',round(bs('Call',K),4),'| Put:',round(bs('Put',K),4))
-with tabs[4]:
- K=st.number_input('Strike Monte Carlo',value=355.0,key='km');ns=st.slider('Simulaciones',1000,100000,20000,1000)
- rng=np.random.default_rng(42);z=rng.standard_normal(ns);t=T/365;end=S*np.exp((r-q-vol*vol/2)*t+vol*np.sqrt(t)*z)
- call=np.maximum(end-K,0)*exp(-r*t);put=np.maximum(K-end,0)*exp(-r*t)
- st.write('Call MC:',round(call.mean(),4),'| Put MC:',round(put.mean(),4),'| Error estándar Call:',round(call.std(ddof=1)/np.sqrt(ns),4))
- st.line_chart(pd.Series(np.sort(end),name='Precios finales simulados'))
-st.caption('Datos históricos ilustrativos; las cotizaciones parciales de opciones pueden estar desfasadas y no deben considerarse ejecutables. Fuentes: investor.apple.com/stock-price/default.aspx y aries.com/us/en/stocks/AAPL/options. No operar sin verificar cotizaciones, vencimiento, liquidez, dividendos y riesgo de asignación.')
+    used=[]
+    for _,row in legs.iterrows():
+        k=float(row['Strike']);kind=row['Tipo']
+        if pricing.startswith('Black'):v=bs(spot,k,t,r,q,sigma,kind)
+        else:v=binomial(spot,k,t,r,q,sigma,kind,'americano' in pricing,150)
+        used.append(v)
+if not np.all(np.isfinite(used)):st.error('No fue posible valorar la estrategia con los parámetros actuales.');st.stop()
+legs_show=legs.copy();legs_show['Prima usada']=np.round(used,5)
+legs_show['Flujo inicial (USD)']=[-int(row['Contratos'])*p*multiplier for (_,row),p in zip(legs.iterrows(),used)]
+st.dataframe(legs_show,use_container_width=True,hide_index=True)
+net_debit=-legs_show['Flujo inicial (USD)'].sum()
+maxprofit,maxloss,roots,knots=extremes(legs,used)
+sc_pnl=float(net_payoff([scenario],legs,used)[0]*multiplier)
+fmt=lambda x:('Sin límite' if math.isinf(x) else f'${x:,.2f}')
+c1,c2,c3,c4=st.columns(4)
+c1.metric('Costo neto inicial (USD)',f'${net_debit:,.2f}',help='Positivo: débito; negativo: crédito.')
+c2.metric('P&L del escenario (USD)',f'${sc_pnl:,.2f}')
+c3.metric('Ganancia máxima teórica (USD)',fmt(maxprofit*multiplier))
+c4.metric('Pérdida máxima teórica (USD)',fmt(maxloss*multiplier))
+st.caption('Resultados al vencimiento, antes de comisiones, impuestos, deslizamiento y efectos de ejercicio anticipado. Pérdida máxima expresada como P&L negativo.')
+
+st.subheader('Perfil de rentabilidad al vencimiento')
+strikes=sorted(set(legs['Strike'].astype(float)))
+left=max(0,min(strikes[0]*.8,spot*.8));right=max(strikes[-1]*1.2,spot*1.2)
+xs=np.unique(np.r_[np.linspace(left,right,350),strikes,[scenario]])
+ys=net_payoff(xs,legs,used)*multiplier
+fig=go.Figure()
+fig.add_trace(go.Scatter(x=xs,y=ys,mode='lines',name='P&L neto',line=dict(color='#3575cf',width=3,shape='linear')))
+fig.add_hline(y=0,line_color='gray',line_width=1)
+for k in strikes:fig.add_vline(x=k,line_color='gray',line_dash='dot',opacity=.3)
+fig.add_trace(go.Scatter(x=[scenario],y=[sc_pnl],mode='markers',name='Escenario',marker=dict(size=11,color='#e09b3d')))
+fig.update_layout(xaxis_title='Precio AAPL al vencimiento (USD)',yaxis_title='P&L total (USD)',height=430,margin=dict(l=5,r=5,t=15,b=5),legend=dict(orientation='h'),hovermode='x unified')
+st.plotly_chart(fig,use_container_width=True)
+st.write('**Puntos de equilibrio:** '+(', '.join(f'${v:,.2f}' for v in roots) if roots else 'Ninguno aislado dentro del dominio calculado'))
+
+with st.expander('Escenarios y descarga',expanded=True):
+    price_grid=np.unique(np.r_[np.linspace(left,right,31),strikes,[scenario]])
+    scenarios=pd.DataFrame({'Precio AAPL (USD)':price_grid,'P&L por acción equivalente (USD)':net_payoff(price_grid,legs,used),'P&L total (USD)':net_payoff(price_grid,legs,used)*multiplier})
+    st.dataframe(scenarios.style.format({'Precio AAPL (USD)':'{:,.2f}','P&L por acción equivalente (USD)':'{:,.4f}','P&L total (USD)':'{:,.2f}'}),use_container_width=True,hide_index=True)
+    st.download_button('Exportar escenarios CSV',scenarios.to_csv(index=False).encode('utf-8-sig'),file_name='AEGIS_Phoenix_escenarios.csv',mime='text/csv')
+    st.download_button('Exportar posiciones CSV',legs_show.to_csv(index=False).encode('utf-8-sig'),file_name='AEGIS_Phoenix_posiciones.csv',mime='text/csv')
+
+st.subheader('Sensibilidad y riesgo')
+tab1,tab2,tab3,tab4=st.tabs(['Sensibilidad Spot / Volatilidad','Monte Carlo','Forward / Curva de tasas','Opciones de mercado'])
+with tab1:
+    st.caption('Valor teórico de la cartera antes del vencimiento, a volatilidades alternativas. No es el payoff al vencimiento.')
+    volgrid=np.array([max(.001,sigma+d) for d in [-.10,-.05,0,.05,.10]])
+    sgrid=np.linspace(spot*.8,spot*1.2,11)
+    heat=np.array([[sum(int(row['Contratos'])*bs(float(s),float(row['Strike']),t,r,q,float(vol),row['Tipo'])*multiplier for _,row in legs.iterrows())-net_debit for s in sgrid] for vol in volgrid])
+    f=go.Figure(go.Heatmap(z=heat,x=np.round(sgrid,2),y=np.round(volgrid*100,2),colorscale='RdBu',zmid=0,colorbar=dict(title='P&L USD')))
+    f.update_layout(xaxis_title='Spot AAPL (USD)',yaxis_title='Volatilidad anual (%)',height=400,margin=dict(l=5,r=5,t=15,b=5))
+    st.plotly_chart(f,use_container_width=True)
+    st.caption('P&L de marcado teórico = valor actual de posiciones − débito neto inicial; se supone volatilidad común por strike. No incluye spread bid/ask.')
+with tab2:
+    simulations=st.slider('Número de simulaciones',1000,30000,10000,1000)
+    seed=st.number_input('Semilla reproducible',value=42,step=1)
+    rng=np.random.default_rng(int(seed))
+    terminal=spot*np.exp((r-q-.5*sigma*sigma)*t+sigma*np.sqrt(t)*rng.standard_normal(simulations))
+    pnl=net_payoff(terminal,legs,used)*multiplier
+    x,y,z=st.columns(3)
+    x.metric('P&L medio simulado',f'${np.mean(pnl):,.2f}')
+    y.metric('Probabilidad de pérdida',f'{np.mean(pnl<0):.1%}')
+    z.metric('Percentil 5% de P&L',f'${np.quantile(pnl,.05):,.2f}')
+    f=go.Figure(go.Histogram(x=pnl,nbinsx=65,marker_color='#3575cf'))
+    f.update_layout(xaxis_title='P&L al vencimiento (USD)',yaxis_title='Frecuencia',height=350,margin=dict(l=5,r=5,t=15,b=5))
+    st.plotly_chart(f,use_container_width=True)
+    st.caption('Simulación ilustrativa bajo movimiento browniano geométrico y medida neutral al riesgo; no es una predicción ni una probabilidad histórica de inversión.')
+with tab3:
+    fwd=spot*math.exp((r-q)*t)
+    st.metric('Forward teórico AAPL (USD)',f'${fwd:,.4f}')
+    st.latex(r'F_{0,T}=S_0 e^{(r-q)T}')
+    st.caption('Se utiliza una tasa plana editable. No se presenta como curva IRS de mercado calibrada.')
+    st.markdown('**Curva de tasas editable (análisis de descuento)**')
+    curve=pd.DataFrame({'Plazo (años)':[.25,.5,1.,2.,3.],'Tasa cero anual (%)':[r*100]*5})
+    edited_curve=st.data_editor(curve,hide_index=True,use_container_width=True,key='curve_editor')
+    edited_curve=edited_curve.sort_values('Plazo (años)')
+    figcurve=go.Figure(go.Scatter(x=edited_curve['Plazo (años)'],y=edited_curve['Tasa cero anual (%)'],mode='lines+markers',name='Curva editable'))
+    figcurve.update_layout(xaxis_title='Años',yaxis_title='Tasa cero (%)',height=300,margin=dict(l=5,r=5,t=15,b=5))
+    st.plotly_chart(figcurve,use_container_width=True)
+    st.caption('La curva es de tasas cero hipotéticas; una curva IRS real requiere cotizaciones swap, convenciones y bootstrap. No sustituye automáticamente r en las valoraciones.')
+with tab4:
+    st.caption('Consulta opcional de vencimientos y cotizaciones externas. Revisa el timestamp, liquidez y bid/ask; pueden existir datos faltantes o retrasados.')
+    if st.button('Consultar vencimientos AAPL'):
+        exps,error=expirations()
+        if error:st.warning(f'Fuente no disponible: {error}')
+        elif exps:st.session_state['available_exps']=exps
+    if st.session_state.get('available_exps'):
+        selected=st.selectbox('Vencimiento de cadena',st.session_state['available_exps'])
+        if st.button('Consultar cadena Bid / Ask'):
+            calls,puts,error=option_chain(selected)
+            if error:st.warning(f'No se pudo consultar: {error}')
+            else:
+                for kind,df in [('Call',calls),('Put',puts)]:
+                    st.write(f'**{kind}s — {selected}**')
+                    st.dataframe(df.loc[df['strike'].between(spot*.75,spot*1.25)].reset_index(drop=True),use_container_width=True,hide_index=True)
+                st.info('Para trabajar con primas observadas, copia manualmente Bid/Ask de cada strike a la tabla de posiciones y selecciona el modo de mercado. No se completan datos faltantes automáticamente.')
+    else:st.info('Presiona «Consultar vencimientos AAPL» para solicitar datos externos.')
+
+with st.expander('Metodología, interpretación y limitaciones'):
+    st.markdown('''**Estructura base:** Bull Call Spread (Call larga 350, corta 370); Bear Put Spread (Put larga 345, corta 325); Butterfly (Call larga 355, dos Calls cortas 365, Call larga 375). Todas las opciones comparten fecha de vencimiento.
+
+**Prima:** Black-Scholes y binomial son modelos teóricos; las opciones listadas sobre acciones estadounidenses suelen permitir ejercicio americano. El payoff al vencimiento es idéntico para ambas modalidades, pero la valoración antes del vencimiento puede diferir.
+
+**P&L:** suma de cantidades × (valor intrínseco al vencimiento − prima pagada o cobrada) × multiplicador. Para compras se usa Ask y para ventas Bid cuando se trabaja con cotizaciones de mercado.
+
+**Riesgos:** volatilidad, gap de precios, liquidez, spread bid/ask, ejercicio y asignación anticipados, comisiones, dividendos, margen y variación de precios entre consultas. No se recomienda operar sin revisar estos riesgos.
+
+**Fuente de precios externos opcional:** Yahoo Finance mediante yfinance, sin garantía de continuidad, exactitud, sincronización o tiempo real. Los datos iniciales son referencias editables, no cotizaciones actuales certificadas.
+
+**Interpretación:** una ganancia máxima positiva no garantiza un rendimiento atractivo. Comparar probabilidad de pérdida, débito inicial, amplitud de las zonas de pérdida y sensibilidad. Esta herramienta es educativa y no constituye asesoría de inversión.''')
