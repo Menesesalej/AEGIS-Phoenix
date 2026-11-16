@@ -7,7 +7,7 @@ import streamlit as st
 from scipy.stats import norm
 from scipy.optimize import brentq
 
-st.set_page_config(page_title='AEGIS Phoenix | AAPL Options Analytics', page_icon='📈', layout='wide', initial_sidebar_state='expanded')
+st.set_page_config(page_title='AEGIS Phoenix | AAPL Options Analytics', page_icon='A', layout='wide', initial_sidebar_state='expanded')
 st.markdown('''<style>
 .block-container{padding-top:1.3rem;max-width:1500px} h1,h2,h3{letter-spacing:-.025em}
 [data-testid="stMetric"]{background:rgba(120,130,150,.07);padding:14px;border-radius:12px;border:1px solid rgba(120,130,150,.16)}
@@ -103,7 +103,7 @@ def option_chain(expiry):
     except Exception as e:return None,None,str(e)[:150]
 
 st.markdown('<div class="brand">AEGIS PHOENIX <span style="font-weight:400;opacity:.5">/ AAPL</span></div><div class="subtitle">Equity Options · Multi-Leg Strategy & Risk Analytics</div>',unsafe_allow_html=True)
-st.caption('Herramienta analítica independiente sobre Apple Inc. (AAPL). No afiliada a Apple. Los datos externos pueden estar retrasados o no disponibles.')
+st.caption('Apple Inc. · NASDAQ: AAPL | Análisis independiente. Cotizaciones externas sujetas a disponibilidad, retrasos y validación de liquidez.')
 
 with st.sidebar:
     st.header('Parámetros de mercado')
@@ -113,12 +113,14 @@ with st.sidebar:
     elif market_mode:st.warning('No se pudo obtener el precio. Captura manual habilitada.')
     spot=st.number_input('Precio spot (USD)',min_value=0.01,value=float(snap['spot']) if snap else 356.27,step=1.0,format='%.2f')
     exps, exps_error = expirations() if st.session_state.get('load_chain_on') else ([], None)
+    exps=[x for x in exps if date.fromisoformat(x)>date.today()]
     if exps:
         expiry_choices=[date.fromisoformat(x) for x in exps]
         expiry=st.selectbox('Vencimiento listado AAPL', expiry_choices, format_func=lambda d:d.isoformat(), key='market_expiry')
     else:
-        expiry=st.date_input('Fecha de vencimiento',value=date.today()+timedelta(days=30),min_value=date.today())
+        expiry=st.date_input('Fecha de vencimiento',value=date.today()+timedelta(days=30),min_value=date.today()+timedelta(days=1))
     days=max((expiry-date.today()).days,0);t=max(days,0)/365
+    if days<=0:st.error('El vencimiento debe ser posterior a la fecha de valoración.');st.stop()
     r=st.number_input('Tasa libre de riesgo anual (%)',value=4.0,step=.25)/100
     q=st.number_input('Dividend yield anual (%)',value=.3,step=.1)/100
     sigma=st.number_input('Volatilidad anual (%)',min_value=0.0,value=22.5,step=.5)/100
@@ -163,7 +165,8 @@ if st.button('Actualizar Bid / Ask de las posiciones desde el mercado', type='pr
                 # A zero bid is possible for illiquid contracts; an absent/nonpositive ask is not executable.
                 current.loc[i,'Bid']=float(bid) if pd.notna(bid) and bid>=0 else np.nan
                 current.loc[i,'Ask']=float(ask) if pd.notna(ask) and ask>0 else np.nan
-                filled+=1
+                if pd.notna(current.loc[i,'Bid']) and pd.notna(current.loc[i,'Ask']):filled+=1
+                else:missing.append(f'{kind} {strike:g} (sin Bid/Ask válido)')
                 last=pd.to_datetime(quote.get('lastTradeDate'),utc=True,errors='coerce')
                 if pd.notna(last) and (pd.Timestamp.now(tz='UTC')-last).days>=3:stale.append(f'{kind} {strike:g}')
             st.session_state['legs_editor']=current
@@ -177,7 +180,7 @@ if st.session_state.get('quote_report'):
     if rep['filled']==0:st.error('La fuente no devolvió cotizaciones para los strikes solicitados. No se pueden mostrar Bid/Ask reales sin datos de la bolsa.')
     if rep['stale']:st.warning('Última operación registrada hace ≥3 días (no equivale a antigüedad del Bid/Ask): '+', '.join(rep['stale']))
 if 'legs_editor' not in st.session_state:st.session_state['legs_editor']=DEFAULT_LEGS.copy()
-st.info('Los campos vacíos de Bid/Ask no son un error de cálculo: aún no hay precios confirmados para esos contratos. No se sustituyen por primas inventadas.')
+st.caption('Bid/Ask: cotización externa verificada solo cuando la fuente devuelve un precio válido. En ausencia de datos se muestra «Sin cotización»; las primas teóricas aparecen por separado.')
 legs=st.data_editor(st.session_state['legs_editor'],key=f"editable_legs_{st.session_state.get('editor_version',0)}",num_rows='dynamic',hide_index=True,use_container_width=True,
     column_config={'Tipo':st.column_config.SelectboxColumn('Tipo',options=['Call','Put'],required=True),'Strike':st.column_config.NumberColumn('Strike (USD)',min_value=.01,required=True),'Contratos':st.column_config.NumberColumn('Contratos (+/−)',step=1,required=True),'Bid':st.column_config.NumberColumn('Bid (USD)',min_value=0.0),'Ask':st.column_config.NumberColumn('Ask (USD)',min_value=0.0)})
 legs=legs.dropna(subset=['Tipo','Strike','Contratos']).copy()
@@ -189,6 +192,7 @@ if legs.empty:st.warning('No hay posiciones válidas.');st.stop()
 legs['Contratos']=legs['Contratos'].astype(int)
 
 st.subheader('Valuación y primas')
+st.caption('El modo teórico funciona sin conexión a una cadena de opciones. El modo de mercado requiere Bid para ventas y Ask para compras; nunca mezcla cotizaciones faltantes con estimaciones.')
 pricing=st.radio('Fuente de primas',['Black-Scholes · teórico','Árbol binomial europeo · teórico','Árbol binomial americano · teórico','Bid/Ask capturados · mercado'],horizontal=True)
 if pricing.startswith('Bid/Ask'):
     used=[];missing=[]
@@ -196,7 +200,7 @@ if pricing.startswith('Bid/Ask'):
         quote=row.get('Ask') if row['Contratos']>0 else row.get('Bid')
         if pd.isna(quote) or (row['Contratos']>0 and float(quote)<=0):missing.append(i);used.append(float('nan'))
         else:used.append(float(quote))
-    if missing:st.error(f'Faltan cotizaciones válidas Bid/Ask para {len(missing)} posición(es). Activa los vencimientos de mercado, elige la fecha listada y pulsa Actualizar Bid / Ask. No se sustituirán por primas teóricas.');st.stop()
+    if missing:st.error(f'No es posible valorar a precios de mercado: faltan Bid/Ask de {len(missing)} posición(es). Selecciona Black-Scholes para un análisis teórico, o carga cotizaciones verificadas.');st.stop()
 else:
     used=[]
     for _,row in legs.iterrows():
@@ -206,8 +210,12 @@ else:
         used.append(v)
 if not np.all(np.isfinite(used)):st.error('No fue posible valorar la estrategia con los parámetros actuales.');st.stop()
 legs_show=legs.copy();legs_show['Prima usada']=np.round(used,5)
+legs_show['Bid']=legs_show['Bid'].apply(lambda x: f'{float(x):.4f}' if pd.notna(x) else 'Sin cotización')
+legs_show['Ask']=legs_show['Ask'].apply(lambda x: f'{float(x):.4f}' if pd.notna(x) else 'Sin cotización')
 legs_show['Flujo inicial (USD)']=[-int(row['Contratos'])*p*multiplier for (_,row),p in zip(legs.iterrows(),used)]
 st.dataframe(legs_show,use_container_width=True,hide_index=True)
+if (legs_show[['Bid','Ask']]=='Sin cotización').any().any():
+    st.caption('«Sin cotización» en Bid/Ask indica datos externos faltantes; no equivale a USD 0.')
 net_debit=-legs_show['Flujo inicial (USD)'].sum()
 maxprofit,maxloss,roots,knots=extremes(legs,used)
 sc_pnl=float(net_payoff([scenario],legs,used)[0]*multiplier)
@@ -257,6 +265,9 @@ with tab2:
     rng=np.random.default_rng(int(seed))
     terminal=spot*np.exp((r-q-.5*sigma*sigma)*t+sigma*np.sqrt(t)*rng.standard_normal(simulations))
     pnl=net_payoff(terminal,legs,used)*multiplier
+    tolerance=1e-6*max(1,abs(maxprofit*multiplier) if np.isfinite(maxprofit) else 1,abs(maxloss*multiplier) if np.isfinite(maxloss) else 1)
+    if (np.isfinite(maxloss) and np.min(pnl)<maxloss*multiplier-tolerance) or (np.isfinite(maxprofit) and np.max(pnl)>maxprofit*multiplier+tolerance):
+        st.error('Control de riesgo fallido: Monte Carlo excede los límites teóricos. Revisa primas y posiciones.');st.stop()
     x,y,z=st.columns(3)
     x.metric('P&L medio simulado',f'${np.mean(pnl):,.2f}')
     y.metric('Probabilidad de pérdida',f'{np.mean(pnl<0):.1%}')
@@ -264,6 +275,7 @@ with tab2:
     f=go.Figure(go.Histogram(x=pnl,nbinsx=65,marker_color='#3575cf'))
     f.update_layout(xaxis_title='P&L al vencimiento (USD)',yaxis_title='Frecuencia',height=350,margin=dict(l=5,r=5,t=15,b=5))
     st.plotly_chart(f,use_container_width=True)
+    st.caption(f'Control de consistencia: {np.min(pnl):,.2f} ≤ P&L simulado ≤ {np.max(pnl):,.2f} USD; mismos contratos y primas que el perfil al vencimiento.')
     st.caption('Simulación ilustrativa bajo movimiento browniano geométrico y medida neutral al riesgo; no es una predicción ni una probabilidad histórica de inversión.')
 with tab3:
     fwd=spot*math.exp((r-q)*t)
