@@ -112,7 +112,12 @@ with st.sidebar:
     if snap:st.success(f"Cierre obtenido: USD {snap['spot']:.2f} · {snap['asof']}")
     elif market_mode:st.warning('No se pudo obtener el precio. Captura manual habilitada.')
     spot=st.number_input('Precio spot (USD)',min_value=0.01,value=float(snap['spot']) if snap else 356.27,step=1.0,format='%.2f')
-    expiry=st.date_input('Fecha de vencimiento',value=date.today()+timedelta(days=30),min_value=date.today())
+    exps, exps_error = expirations() if st.session_state.get('load_chain_on') else ([], None)
+    if exps:
+        expiry_choices=[date.fromisoformat(x) for x in exps]
+        expiry=st.selectbox('Vencimiento listado AAPL', expiry_choices, format_func=lambda d:d.isoformat(), key='market_expiry')
+    else:
+        expiry=st.date_input('Fecha de vencimiento',value=date.today()+timedelta(days=30),min_value=date.today())
     days=max((expiry-date.today()).days,0);t=max(days,0)/365
     r=st.number_input('Tasa libre de riesgo anual (%)',value=4.0,step=.25)/100
     q=st.number_input('Dividend yield anual (%)',value=.3,step=.1)/100
@@ -125,10 +130,52 @@ st.subheader('Construcción de la estrategia')
 a,b=st.columns([1,4])
 with a:
     if st.button('Restaurar estrategia base',use_container_width=True):
-        st.session_state['legs_editor']=DEFAULT_LEGS.copy();st.rerun()
+        st.session_state['legs_editor']=DEFAULT_LEGS.copy();st.session_state['editor_version']=st.session_state.get('editor_version',0)+1;st.session_state.pop('quote_report',None);st.rerun()
 with b:st.caption('Cantidad positiva = posición larga; negativa = posición corta. Todas las posiciones comparten el vencimiento seleccionado.')
+st.toggle('Activar vencimientos de mercado', key='load_chain_on', help='Consulta los vencimientos listados de AAPL. Requiere acceso externo y puede fallar.')
+if st.session_state.get('load_chain_on') and not exps:
+    st.warning('No se pudo consultar el listado de vencimientos. No se rellenarán precios de opciones. ' + str(exps_error or ''))
+if st.button('Actualizar Bid / Ask de las posiciones desde el mercado', type='primary'):
+    if not st.session_state.get('load_chain_on') or not exps:
+        st.warning('Primero activa «Vencimientos de mercado» y selecciona un vencimiento listado.')
+    else:
+        calls,puts,error=option_chain(expiry.isoformat())
+        if error:
+            st.error('No se pudieron obtener las cotizaciones: '+error)
+        else:
+            # Reconcile currently edited rows, not just the original defaults.
+            current=st.session_state.get('legs_editor',DEFAULT_LEGS).copy()
+            edits=st.session_state.get(f"editable_legs_{st.session_state.get('editor_version',0)}",{})
+            for idx,changes in edits.get('edited_rows',{}).items():
+                for col,val in changes.items():current.loc[int(idx),col]=val
+            for item in edits.get('added_rows',[]):current=pd.concat([current,pd.DataFrame([item])],ignore_index=True)
+            if edits.get('deleted_rows'):current=current.drop(index=edits['deleted_rows'],errors='ignore').reset_index(drop=True)
+            filled=0;missing=[];stale=[]
+            for i,row in current.iterrows():
+                kind=row.get('Tipo'); strike=pd.to_numeric(row.get('Strike'),errors='coerce')
+                source=calls if kind=='Call' else puts if kind=='Put' else None
+                if source is None or pd.isna(strike):missing.append(str(i+1));continue
+                match=source.loc[np.isclose(pd.to_numeric(source['strike'],errors='coerce'),float(strike),atol=1e-5)]
+                if match.empty:missing.append(f'{kind} {strike:g}');current.loc[i,['Bid','Ask']]=np.nan;continue
+                quote=match.iloc[0]
+                bid=pd.to_numeric(quote.get('bid'),errors='coerce');ask=pd.to_numeric(quote.get('ask'),errors='coerce')
+                # A zero bid is possible for illiquid contracts; an absent/nonpositive ask is not executable.
+                current.loc[i,'Bid']=float(bid) if pd.notna(bid) and bid>=0 else np.nan
+                current.loc[i,'Ask']=float(ask) if pd.notna(ask) and ask>0 else np.nan
+                filled+=1
+                last=pd.to_datetime(quote.get('lastTradeDate'),utc=True,errors='coerce')
+                if pd.notna(last) and (pd.Timestamp.now(tz='UTC')-last).days>=3:stale.append(f'{kind} {strike:g}')
+            st.session_state['legs_editor']=current
+            st.session_state['editor_version']=st.session_state.get('editor_version',0)+1
+            st.session_state['quote_report']={'filled':filled,'missing':missing,'stale':stale,'expiry':expiry.isoformat(),'time':datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}
+            st.rerun()
+if st.session_state.get('quote_report'):
+    rep=st.session_state['quote_report']
+    st.info(f"Cadena consultada: {rep['expiry']} · Consulta: {rep['time']} · Contratos encontrados: {rep['filled']}. Cotizaciones externas indicativas; no necesariamente en tiempo real ni ejecutables.")
+    if rep['missing']:st.warning('Sin cotización exacta: '+', '.join(rep['missing']))
+    if rep['stale']:st.warning('Última operación registrada hace ≥3 días (no equivale a antigüedad del Bid/Ask): '+', '.join(rep['stale']))
 if 'legs_editor' not in st.session_state:st.session_state['legs_editor']=DEFAULT_LEGS.copy()
-legs=st.data_editor(st.session_state['legs_editor'],key='editable_legs',num_rows='dynamic',hide_index=True,use_container_width=True,
+legs=st.data_editor(st.session_state['legs_editor'],key=f"editable_legs_{st.session_state.get('editor_version',0)}",num_rows='dynamic',hide_index=True,use_container_width=True,
     column_config={'Tipo':st.column_config.SelectboxColumn('Tipo',options=['Call','Put'],required=True),'Strike':st.column_config.NumberColumn('Strike (USD)',min_value=.01,required=True),'Contratos':st.column_config.NumberColumn('Contratos (+/−)',step=1,required=True),'Bid':st.column_config.NumberColumn('Bid (USD)',min_value=0.0),'Ask':st.column_config.NumberColumn('Ask (USD)',min_value=0.0)})
 legs=legs.dropna(subset=['Tipo','Strike','Contratos']).copy()
 if legs.empty:st.info('Agrega una posición para comenzar.');st.stop()
@@ -144,9 +191,9 @@ if pricing.startswith('Bid/Ask'):
     used=[];missing=[]
     for i,row in legs.iterrows():
         quote=row.get('Ask') if row['Contratos']>0 else row.get('Bid')
-        if pd.isna(quote):missing.append(i);used.append(float('nan'))
+        if pd.isna(quote) or (row['Contratos']>0 and float(quote)<=0):missing.append(i);used.append(float('nan'))
         else:used.append(float(quote))
-    if missing:st.error(f'Faltan cotizaciones Bid/Ask para {len(missing)} posición(es). No se sustituirán por primas teóricas.');st.stop()
+    if missing:st.error(f'Faltan cotizaciones válidas Bid/Ask para {len(missing)} posición(es). Activa los vencimientos de mercado, elige la fecha listada y pulsa Actualizar Bid / Ask. No se sustituirán por primas teóricas.');st.stop()
 else:
     used=[]
     for _,row in legs.iterrows():
@@ -243,7 +290,7 @@ with tab4:
                 for kind,df in [('Call',calls),('Put',puts)]:
                     st.write(f'**{kind}s — {selected}**')
                     st.dataframe(df.loc[df['strike'].between(spot*.75,spot*1.25)].reset_index(drop=True),use_container_width=True,hide_index=True)
-                st.info('Para trabajar con primas observadas, copia manualmente Bid/Ask de cada strike a la tabla de posiciones y selecciona el modo de mercado. No se completan datos faltantes automáticamente.')
+                st.info('Para cargar los Bid/Ask automáticamente en las posiciones, usa el botón «Actualizar Bid / Ask» sobre la tabla y selecciona este mismo vencimiento en el panel lateral.')
     else:st.info('Presiona «Consultar vencimientos AAPL» para solicitar datos externos.')
 
 with st.expander('Metodología, interpretación y limitaciones'):
