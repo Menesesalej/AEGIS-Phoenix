@@ -4,16 +4,17 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from math import log,sqrt,exp,erf
 st.set_page_config(page_title='AEGIS Phoenix | AAPL',layout='wide')
-st.title('🍎 AEGIS Phoenix 3.0 — Laboratorio editable AAPL')
-st.caption('Caso académico. Cotización AAPL: cierre 13-nov-2026, $356.27 (Apple Investor Relations). Opciones: muestra de cadena Aries para 23-nov-2026; los bid/ask pueden tener marcas temporales diferentes. No es una cotización ejecutable sincronizada.')
-st.sidebar.header('Supuestos del profesor')
-st.sidebar.info('Todos los parámetros son editables. Los valores iniciales son una referencia histórica, NO cotizaciones en vivo.')
-S=st.sidebar.number_input('Precio AAPL USD',value=356.27,step=0.01)
-T=st.sidebar.number_input('Días al vencimiento',min_value=1,value=7)
-r=st.sidebar.number_input('Tasa libre de riesgo anual (%) — supuesto editable',value=4.0)/100
-q=st.sidebar.number_input('Dividend yield anual (%) — supuesto editable',value=0.3)/100
-vol=st.sidebar.number_input('Volatilidad anual (%) — supuesto editable',value=22.5)/100
-st.sidebar.caption('El 22.5% es IV ATM indicativa de la página consultada, no una IV validada para todos los strikes.')
+st.markdown("""<div style="display:flex;align-items:center;gap:20px;margin-bottom:10px"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+PHBhdGggZmlsbD0iIzE2MWMyOCIgZD0iTTMyLjYgMTQuMmMtMy4zLS4zLTUuNCAxLjgtOC4xIDEuOC0yLjUgMC00LjUtMi03LjctMS43QzkuNiAxNSA1LjEgMjEuMiA2LjQgMjkuNGMxIDYuNCA1LjcgMTUuMSAxMC4zIDE1LjEgMi41IDAgMy44LTEuNiA3LjYtMS42IDMuNSAwIDQuOSAxLjYgNy41IDEuNiA0LjEgMCA4LTYuNCA5LjgtMTEuNC01LjQtMi4xLTcuNC05LjUtMi40LTEzLjQtMS44LTEuMS0zLjktMS41LTYuNi0xLjV6Ii8+PHBhdGggZmlsbD0iIzE2MWMyOCIgZD0iTTI0LjggMTMuNUMyNC4zIDcuOCAyOC4yIDMgMzQuNCAyLjFjLjQgNS43LTMuOCAxMC42LTkuNiAxMS40eiIvPjwvc3ZnPg==" width="54" height="54" alt="Apple"/><div><div style="font-size:2rem;font-weight:700;letter-spacing:-.04em">AEGIS Phoenix</div><div style="font-size:.86rem;color:#77808d;letter-spacing:.06em">AAPL · DERIVATIVES & STRUCTURED STRATEGIES</div></div></div>""",unsafe_allow_html=True)
+st.caption('Apple Inc. · NASDAQ: AAPL | Motor de valoración de opciones y análisis de estrategias multileg.')
+st.info('Datos de referencia histórica: AAPL $356.27 (13 nov 2026). Los parámetros iniciales no representan cotizaciones en vivo; las primas de mercado deben validarse para el mismo vencimiento y momento.')
+st.sidebar.header('Parámetros de mercado')
+st.sidebar.caption('Parámetros editables · Escenarios y sensibilidad de valoración')
+S=st.sidebar.number_input('Precio spot AAPL (USD)',value=356.27,step=0.01)
+T=st.sidebar.number_input('Plazo residual (días)',min_value=1,value=7)
+r=st.sidebar.number_input('Tasa libre de riesgo anual (%)',value=4.0)/100
+q=st.sidebar.number_input('Rendimiento por dividendos anual (%)',value=0.3)/100
+vol=st.sidebar.number_input('Volatilidad anual estimada (%)',value=22.5)/100
+st.sidebar.caption('Volatilidad de referencia indicativa; no corresponde necesariamente a la IV de cada contrato.')
 N=lambda x:0.5*(1+erf(x/sqrt(2)))
 def bs(typ,K):
  t=T/365
@@ -35,18 +36,18 @@ def default_rows():
   ['Bull Call','Call',350,1,None,None],['Bull Call','Call',370,-1,None,None],
   ['Bear Put','Put',345,1,None,None],['Bear Put','Put',325,-1,None,None],
   ['Butterfly','Call',355,1,None,None],['Butterfly','Call',365,-2,None,None],['Butterfly','Call',375,1,None,None]],columns=['Componente','Tipo','Strike','Cantidad (+compra / -venta)','Bid real','Ask real'])
-st.subheader('1. Estructura combinada editable')
-st.write('Las siete posiciones son una propuesta inicial ajustada al nuevo precio de AAPL. Cambia strikes, cantidades y primas para probar combinaciones. Los precios de opciones no verificados quedan en blanco.')
+st.subheader('01 · Estructura de opciones')
+st.write('Estrategia multileg editable. Los campos Bid/Ask vacíos indican ausencia de una cotización verificada; no equivalen a cero.')
 if 'legs' not in st.session_state: st.session_state.legs=default_rows()
-if st.button('Restablecer las 7 posiciones originales'):
+if st.button('Restaurar estrategia base'):
  st.session_state.legs=default_rows()
  st.session_state.pop('legs_editor',None)
  st.rerun()
-st.caption('Para un escenario de clase, cambia los valores en la barra lateral y edita cada fila. Puedes agregar o borrar posiciones. Cantidad positiva = compra; negativa = venta.')
+st.caption('Modifica los parámetros y las posiciones para analizar escenarios. Cantidad positiva = compra; negativa = venta.')
 df=st.data_editor(st.session_state.legs,num_rows='dynamic',hide_index=True,use_container_width=True,key='legs_editor',column_config={'Tipo':st.column_config.SelectboxColumn(options=['Call','Put']),'Componente':st.column_config.SelectboxColumn(options=['Bull Call','Bear Put','Butterfly','Otro'])})
 df['Strike']=pd.to_numeric(df['Strike'],errors='coerce');df['Cantidad (+compra / -venta)']=pd.to_numeric(df['Cantidad (+compra / -venta)'],errors='coerce')
 df=df.dropna(subset=['Strike','Cantidad (+compra / -venta)'])
-mode=st.radio('Método de prima', ['Black-Scholes (teórico)','Binomial europeo (teórico)','Binomial americano (teórico)','Mercado Bid/Ask (solo cotizaciones capturadas)'],horizontal=True)
+mode=st.radio('Modelo de valoración', ['Black-Scholes (teórico)','Binomial europeo (teórico)','Binomial americano (teórico)','Mercado Bid/Ask (solo cotizaciones capturadas)'],horizontal=True)
 rows=[];missing=[]
 for _,a in df.iterrows():
  typ=a['Tipo'];K=float(a['Strike']);qty=float(a['Cantidad (+compra / -venta)'])
@@ -70,13 +71,22 @@ else:
   k=float(a['Strike']);qty=float(a['Cantidad (+compra / -venta)']);gross+=qty*(np.maximum(xx-k,0) if a['Tipo']=='Call' else np.maximum(k-xx,0))
  yy=gross-cost
  st.metric('Costo neto por acción (positivo = débito)',f'${cost:,.2f}')
- scenario=st.number_input('Supuesto del profesor: ¿a qué precio termina Apple?',min_value=0.01,value=float(round(S,2)),step=1.0)
+ scenario=st.number_input('Escenario de precio AAPL al vencimiento (USD)',min_value=0.01,value=float(round(S,2)),step=1.0)
  scenario_gross=sum(float(a['Cantidad (+compra / -venta)'])*(max(scenario-float(a['Strike']),0) if a['Tipo']=='Call' else max(float(a['Strike'])-scenario,0)) for _,a in res.iterrows())
- st.metric('Resultado de ese supuesto (100 acciones)',f'${(scenario_gross-cost)*100:,.2f}')
- st.metric('Resultado mínimo dentro del rango mostrado, por 100 acciones',f'${yy.min()*100:,.2f}')
+ st.metric('P&L del escenario (100 acciones)',f'${(scenario_gross-cost)*100:,.2f}')
+ # En una cartera de opciones, los extremos pueden estar fuera del rango dibujado.
+ # Evaluar todos los strikes y el límite inferior S_T=0; comprobar las pendientes de las colas.
+ critical=sorted(set([0.0]+strikes))
+ def total_payoff(z):
+  return sum(float(a['Cantidad (+compra / -venta)'])*(max(z-float(a['Strike']),0) if a['Tipo']=='Call' else max(float(a['Strike'])-z,0)) for _,a in res.iterrows())-cost
+ tail_slope=sum(float(a['Cantidad (+compra / -venta)']) for _,a in res.iterrows() if a['Tipo']=='Call')
+ critical_vals=[total_payoff(z) for z in critical]
+ minval=min(critical_vals);maxval=max(critical_vals)
+ st.metric('Pérdida máxima teórica (100 acciones)', 'Ilimitada' if tail_slope < -1e-10 else f'${minval*100:,.2f}')
+ st.metric('Ganancia máxima teórica (100 acciones)', 'Ilimitada' if tail_slope > 1e-10 else f'${maxval*100:,.2f}')
  fig,ax=plt.subplots(figsize=(10,4));ax.plot(xx,yy,linewidth=2);ax.axhline(0,color='gray',linewidth=1)
  for k in strikes:ax.axvline(k,alpha=.15,linestyle='--')
- ax.set_xlabel('Precio AAPL al vencimiento (USD)');ax.set_ylabel('Utilidad / pérdida neta (USD por acción)');ax.set_title('Payoff al vencimiento — segmentos rectos');ax.grid(alpha=.15);st.pyplot(fig)
+ ax.set_xlabel('Precio AAPL al vencimiento (USD)');ax.set_ylabel('Utilidad / pérdida neta (USD por acción)');ax.set_title('Perfil de rentabilidad al vencimiento');ax.grid(alpha=.15);st.pyplot(fig)
  # evaluate exact breakpoints, slopes and roots
  def payoff(z):
   return sum(float(a['Cantidad (+compra / -venta)'])*(max(z-float(a['Strike']),0) if a['Tipo']=='Call' else max(float(a['Strike'])-z,0)) for _,a in res.iterrows())-cost
@@ -86,11 +96,11 @@ else:
   if abs(fa)<1e-7:roots.append(a)
   if fa*fb<0:roots.append(a-fa*(b-a)/(fb-fa))
   if abs(fb)<1e-7:roots.append(b)
- st.write('Equilibrios en el rango mostrado:',', '.join(f'${z:.2f}' for z in sorted(set(round(x,5) for x in roots))) or 'Ninguno')
+ st.write('Puntos de equilibrio en el rango visualizado:',', '.join(f'${z:.2f}' for z in sorted(set(round(x,5) for x in roots))) or 'Ninguno')
  table=pd.DataFrame({'Precio final AAPL':pts,'Utilidad por acción':[payoff(x) for x in pts],'Utilidad por 100 acciones':[payoff(x)*100 for x in pts]})
  st.dataframe(table,hide_index=True,use_container_width=True)
  st.download_button('Descargar resultados CSV',table.to_csv(index=False).encode('utf-8-sig'),'aegis_phoenix_resultados.csv','text/csv')
-st.divider();st.subheader('2. Métodos académicos')
+st.divider();st.subheader('02 · Modelos de valoración y simulación')
 tabs=st.tabs(['Forward','Curva IRS (referencia)','Árbol binomial','Black-Scholes','Monte Carlo'])
 with tabs[0]:
  st.write('Forward teórico con rendimiento por dividendos continuo: F = S × exp((r − q) × T).')
